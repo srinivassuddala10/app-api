@@ -1,4 +1,4 @@
-name: app-api-deployment
+name: Deploy Full Stack App with Terraform
 
 on:
   workflow_dispatch:
@@ -69,7 +69,7 @@ jobs:
       - name: Terraform Apply
         run: terraform -chdir=infra apply -auto-approve tfplan
 
-      # --- Frontend deploy to S3 ---
+      # --- Deploy Frontend to S3 ---
       - name: Deploy frontend to S3
         run: |
           aws s3 sync ./frontend s3://my-frontend-bucket --delete
