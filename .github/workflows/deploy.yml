@@ -1,4 +1,4 @@
-name: Full CI/CD Deployment
+name: Frontend and backed deployment
 
 on:
   workflow_dispatch:
