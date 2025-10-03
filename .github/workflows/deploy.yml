@@ -1,80 +1,76 @@
-name: Frontend and backed deployment
+name: app-api-deployment
 
 on:
   workflow_dispatch:
     inputs:
-      github_branch:
-        description: "GitHub branch"
-        required: true
-      github_token:
-        description: "GitHub token"
+      branch:
+        description: "Branch to deploy"
         required: true
       aws_config:
-        description: "AWS Credentials & Region [JSON String]"
+        description: "AWS credentials & region in JSON format"
         required: true
         type: string
-        default: '{}'
 
 permissions:
   contents: write
   actions: write
 
+env:
+  AWS_ACCESS_KEY_ID: ${{ fromJson(github.event.inputs.aws_config).aws_access_key_id }}
+  AWS_SECRET_ACCESS_KEY: ${{ fromJson(github.event.inputs.aws_config).aws_secret_access_key }}
+  AWS_REGION: ${{ fromJson(github.event.inputs.aws_config).region }}
+  AWS_ACCOUNT_ID: ${{ fromJson(github.event.inputs.aws_config).aws_account_id }}
+  IMAGE_NAME: backend-api
+  IMAGE_TAG: latest
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    env:
-      IMAGE_NAME: backend-api
-      ENV: staging
-
     steps:
-      # 1️ Checkout repository
+
+      # --- Checkout code ---
       - name: Checkout repository
         uses: actions/checkout@v3
         with:
           ref: ${{ github.event.inputs.branch }}
 
-      # 2️ Parse AWS credentials from JSON input
-      - name: Parse AWS Config
-        run: |
-          echo "AWS_ACCESS_KEY_ID=$(echo '${{ github.event.inputs.aws_config }}' | jq -r '.access_key')" >> $GITHUB_ENV
-          echo "AWS_SECRET_ACCESS_KEY=$(echo '${{ github.event.inputs.aws_config }}' | jq -r '.secret_key')" >> $GITHUB_ENV
-          echo "AWS_REGION=$(echo '${{ github.event.inputs.aws_config }}' | jq -r '.region')" >> $GITHUB_ENV
-
-      # 3️ Configure AWS CLI
-      - name: Configure AWS Credentials
+      # --- Configure AWS credentials ---
+      - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ env.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ env.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # 4️ Setup Terraform
+      # --- Login to ECR ---
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # --- Build and push Docker image ---
+      - name: Build, tag, and push backend Docker image
+        run: |
+          IMAGE_URI=${{ steps.login-ecr.outputs.registry }}/$IMAGE_NAME:$IMAGE_TAG
+          docker build -t $IMAGE_URI ./backend
+          docker push $IMAGE_URI
+
+      # --- Terraform Setup ---
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.13.2
 
-      # 5️ Terraform Init
       - name: Terraform Init
         run: terraform -chdir=infra init
 
-      # 6️Terraform Apply (Provision EC2, S3, ECR)
+      - name: Terraform Plan
+        run: terraform -chdir=infra plan -out=tfplan
+
       - name: Terraform Apply
-        run: terraform -chdir=infra apply -auto-approve
+        run: terraform -chdir=infra apply -auto-approve tfplan
 
-      # 7️ Login to Amazon ECR
-      - name: Login to ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
-
-      # 8️Build and Push Backend Docker Image
-      - name: Build and Push Docker Image
+      # --- Frontend deploy to S3 ---
+      - name: Deploy frontend to S3
         run: |
-          IMAGE_URI=${{ steps.login-ecr.outputs.registry }}/backend-api:latest
-          docker build -t $IMAGE_URI ./backend
-          docker push $IMAGE_URI
-
-      # 9️ Deploy Frontend to S3
-      - name: Sync Frontend to S3
-        run: |
-          aws s3 sync ./frontend s3://my-frontend-bucket-12345 --acl public-read --delete
+          aws s3 sync ./frontend s3://my-frontend-bucket --delete
+          aws cloudfront create-invalidation --distribution-id MY_CLOUDFRONT_ID --paths "/*"
