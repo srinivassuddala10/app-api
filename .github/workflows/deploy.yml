@@ -1,4 +1,4 @@
-name: Full CI/CD Deployment
+name: app-api deployment
 
 on:
   workflow_dispatch:
